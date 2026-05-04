@@ -23,7 +23,7 @@ def registry() -> None:
 @registry.command("list")
 def list_registered_pipelines() -> None:
     """List all pipelines defined in your pipeline_registry.py file."""
-    click.echo(yaml.dump(sorted(pipelines)))
+    click.echo(yaml.dump(sorted(pipelines.keys())))
 
 
 @command_with_verbosity(registry, "describe")

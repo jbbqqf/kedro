@@ -239,7 +239,20 @@ class _ProjectPipelines(MutableMapping):
     __delitem__ = _load_data_wrapper(operator.delitem)
     __iter__ = _load_data_wrapper(iter)
     __len__ = _load_data_wrapper(len)
-    keys = _load_data_wrapper(operator.methodcaller("keys"))
+
+    def keys(self):
+        """Return pipeline names without loading pipeline objects.
+
+        Discovers pipeline names from the filesystem without importing
+        pipeline code, allowing listing even when dependencies are missing.
+        """
+        # If already loaded, use cached content
+        if self._is_data_loaded:
+            return self._content.keys()
+
+        # Use find_pipelines with names_only to discover without importing
+        return find_pipelines(names_only=True)
+
     values = _load_data_wrapper(operator.methodcaller("values"))
     items = _load_data_wrapper(operator.methodcaller("items"))
 
@@ -458,8 +471,8 @@ def _create_pipeline(pipeline_module: types.ModuleType) -> Pipeline | None:
 
 
 def find_pipelines(  # noqa: PLR0912, PLR0915
-    raise_errors: bool = False, pipelines_to_find: list[str] | None = None
-) -> dict[str, Pipeline]:
+    raise_errors: bool = False, pipelines_to_find: list[str] | None = None, names_only: bool = False
+) -> dict[str, Pipeline] | list[str]:
     """Automatically find modular pipelines having a ``create_pipeline``
     function. By default, projects created using Kedro 0.18.3 and higher
     call this function to autoregister pipelines upon creation/addition.
@@ -475,9 +488,13 @@ def find_pipelines(  # noqa: PLR0912, PLR0915
         raise_errors: If ``True``, raise an error upon failed discovery.
         pipelines_to_find: Optional list of pipeline names to load selectively.
             If ``None`` or contains ``"__default__"``, all pipelines are loaded.
+        names_only: If ``True``, return only pipeline names without importing
+            pipeline modules. This is useful for listing pipelines when dependencies
+            may not be installed.
 
     Returns:
-        A generated mapping from pipeline names to ``Pipeline`` objects.
+        A generated mapping from pipeline names to ``Pipeline`` objects, or
+        a list of pipeline names if ``names_only`` is ``True``.
 
     Raises:
         RuntimeError: When the project has not been configured (i.e.
@@ -498,6 +515,38 @@ def find_pipelines(  # noqa: PLR0912, PLR0915
             "'find_pipelines' cannot be called before the project is configured. "
             "Call 'configure_project' first."
         )
+
+    # Fast path: just discover names without importing
+    if names_only:
+        pipeline_names = set()
+
+        # Check for simplified project structure (package.pipeline module)
+        pipeline_module_name = f"{PACKAGE_NAME}.pipeline"
+        if importlib.util.find_spec(pipeline_module_name) is not None:
+            pipeline_names.add("__default__")
+
+        # Check for modular pipelines (package.pipelines.* directories)
+        try:
+            pipelines_package = importlib.resources.files(f"{PACKAGE_NAME}.pipelines")
+            for pipeline_dir in pipelines_package.iterdir():
+                if not pipeline_dir.is_dir():
+                    continue
+
+                pipeline_name = pipeline_dir.name
+                if pipeline_name == "__pycache__":
+                    continue
+                if pipeline_name.startswith("."):
+                    continue
+
+                pipeline_names.add(pipeline_name)
+        except ModuleNotFoundError:
+            pass
+
+        # Always include __default__ if we found any pipelines
+        if pipeline_names:
+            pipeline_names.add("__default__")
+
+        return sorted(pipeline_names)
 
     # Determine if specific pipelines were requested
     load_all = pipelines_to_find is None or "__default__" in pipelines_to_find
